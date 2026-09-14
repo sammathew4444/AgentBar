@@ -113,7 +113,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         let editItem = NSMenuItem()
         editItem.submenu = edit
+        // ⌘Q while the panel is open, since there is no Dock icon or menu bar menu to quit from.
+        let app = NSMenu(title: "AgentBar")
+        app.addItem(withTitle: "Quit AgentBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let appItem = NSMenuItem()
+        appItem.submenu = app
         let main = NSMenu()
+        main.addItem(appItem)
         main.addItem(editItem)
         NSApp.mainMenu = main
     }

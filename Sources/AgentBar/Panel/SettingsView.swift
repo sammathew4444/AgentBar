@@ -79,6 +79,15 @@ struct SettingsView: View {
                     placeholder: UsageSync.safeDeviceId(""), theme: theme
                 )
             }
+
+            // A menu bar app with no Dock icon and no menu needs its own way out.
+            PanelSeparator(theme: theme)
+            HStack {
+                Spacer(minLength: 0)
+                Button("Quit AgentBar") { NSApp.terminate(nil) }
+                    .buttonStyle(OmarchyButtonStyle(theme: theme))
+                    .keyboardShortcut("q", modifiers: .command)
+            }
         }
     }
 
@@ -191,11 +200,22 @@ struct OmarchyTextField: View {
         let hot = focused || hovering
         VStack(alignment: .leading, spacing: 6) {
             FieldLabel(text: label, theme: theme)
-            TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(theme.foreground.darker(1.6).color))
+            // macOS draws a TextField prompt in its own placeholder grey whatever the style says,
+            // which vanishes on light themes, so the placeholder is drawn underneath instead.
+            TextField("", text: $text)
                 .textFieldStyle(.plain)
                 .font(OmarchyStyle.font(OmarchyStyle.FontSize.body))
                 .foregroundStyle(theme.foreground.color)
                 .focused($focused)
+                .background(alignment: .leading) {
+                    if text.isEmpty {
+                        Text(placeholder)
+                            .font(OmarchyStyle.font(OmarchyStyle.FontSize.body))
+                            .foregroundStyle(theme.foreground.darker(1.6).color)
+                            .lineLimit(1)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .padding(.horizontal, 10 + 1)
                 .padding(.vertical, 7 + 1)
                 .background(theme.foreground.color(opacity: hot ? 0.08 : 0.04))
