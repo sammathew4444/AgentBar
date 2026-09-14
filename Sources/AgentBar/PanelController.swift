@@ -6,22 +6,39 @@ import SwiftUI
 /// Borderless, non-activating panel that drops down from the status item.
 /// Placement and fade follow Omarchy's KeyboardPanel (shell/Ui/KeyboardPanel.qml) for a top bar:
 /// centred on the icon, `gapsOut` below the bar, clamped `gapsOut` from the screen edges.
+/// Keys follow PanelKeyCatcher as agents/Panel.qml wires it.
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
     /// `Easing.OutCubic`.
     private static let fadeTiming = CAMediaTimingFunction(controlPoints: 0.33, 1, 0.68, 1)
     /// A click on the status item that dismissed the panel via resign-key must not reopen it.
     private static let reopenDebounce: TimeInterval = 0.3
+    /// j/k scroll step, `Style.space(56)`.
+    private static let scrollStep: CGFloat = 56
+    /// The open panel re-reads the clock this often so countdowns stay true.
+    private static let clockInterval: Duration = .seconds(30)
 
+    /// Called each time the panel opens. Omarchy refreshes limits then (`onOpenedChanged`).
+    var onOpen: (() -> Void)?
+    /// r, Enter or Space: a refresh a person asked for (`refreshNow`).
+    var onRefresh: (() -> Void)?
+    /// The logical open state changed; the bar shows its open-panel indicator from this.
+    var onOpenChange: ((Bool) -> Void)?
+
+    private let model: PanelModel
     private let panel: StatusPanel
-    private let hostingView: NSHostingView<PanelView>
+    private let hostingView: SizeReportingHostingView<PanelView>
+    private weak var anchorButton: NSStatusBarButton?
     private var outsideClickMonitor: Any?
+    private var clockTask: Task<Void, Never>?
     private var lastDismissal = Date.distantPast
     /// Logical open state. The window stays visible a little longer while it fades out.
-    private var isOpen = false
+    private(set) var isOpen = false
 
-    init(theme: OmarchyTheme) {
-        hostingView = NSHostingView(rootView: PanelView(theme: theme))
+    init(model: PanelModel, theme: OmarchyTheme) {
+        self.model = model
+        hostingView = SizeReportingHostingView(rootView: PanelView(model: model, theme: theme))
+        hostingView.sizingOptions = [.intrinsicContentSize]
         panel = StatusPanel(
             contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -43,6 +60,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         panel.contentView = hostingView
         panel.delegate = self
         panel.onCancel = { [weak self] in self?.close() }
+        panel.onKey = { [weak self] event in self?.handleKey(event) ?? false }
+        hostingView.onIntrinsicSizeChange = { [weak self] in
+            // Let SwiftUI finish the pass that changed the size before moving the window.
+            DispatchQueue.main.async { self?.reposition() }
+        }
     }
 
     func toggle(below button: NSStatusBarButton) {
@@ -54,7 +76,40 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     private func open(below button: NSStatusBarButton) {
-        guard let barWindow = button.window, let screen = barWindow.screen ?? NSScreen.main else { return }
+        anchorButton = button
+        isOpen = true
+        onOpenChange?(true)
+        model.cursorActive = false
+        model.now = Date()
+        if !panel.isVisible { panel.alphaValue = 0 }
+        reposition()
+        panel.makeKeyAndOrderFront(nil)
+        scrollToTop()
+        fade(to: 1)
+        installOutsideClickMonitor()
+        startClock()
+        Logger.panel.debug("Panel opened")
+        onOpen?()
+    }
+
+    func close() {
+        guard isOpen else { return }
+        isOpen = false
+        onOpenChange?(false)
+        lastDismissal = Date()
+        removeOutsideClickMonitor()
+        clockTask?.cancel()
+        clockTask = nil
+        fade(to: 0) { [weak self] in
+            guard let self, !self.isOpen else { return }
+            self.panel.orderOut(nil)
+        }
+        Logger.panel.debug("Panel closed")
+    }
+
+    /// Sizes the panel to its content and places it under the icon.
+    private func reposition() {
+        guard let button = anchorButton, let barWindow = button.window, let screen = barWindow.screen ?? NSScreen.main else { return }
         let anchor = barWindow.convertToScreen(button.convert(button.bounds, to: nil))
         let size = hostingView.fittingSize
         let margin = OmarchyStyle.gapsOut
@@ -63,26 +118,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         var origin = NSPoint(x: anchor.midX - size.width / 2, y: barWindow.frame.minY - OmarchyStyle.gapsOut - size.height)
         origin.x = max(bounds.minX + margin, min(origin.x, bounds.maxX - margin - size.width))
         origin.y = max(bounds.minY + margin, origin.y)
-
-        isOpen = true
-        if !panel.isVisible { panel.alphaValue = 0 }
-        panel.setFrame(NSRect(origin: origin.rounded, size: size), display: true)
-        panel.makeKeyAndOrderFront(nil)
-        fade(to: 1)
-        installOutsideClickMonitor()
-        Logger.panel.debug("Panel opened")
-    }
-
-    func close() {
-        guard isOpen else { return }
-        isOpen = false
-        lastDismissal = Date()
-        removeOutsideClickMonitor()
-        fade(to: 0) { [weak self] in
-            guard let self, !self.isOpen else { return }
-            self.panel.orderOut(nil)
-        }
-        Logger.panel.debug("Panel closed")
+        panel.setFrame(NSRect(origin: NSPoint(x: origin.x.rounded(), y: origin.y.rounded()), size: size), display: true)
     }
 
     private func fade(to alpha: CGFloat, completion: (@MainActor () -> Void)? = nil) {
@@ -93,6 +129,77 @@ final class PanelController: NSObject, NSWindowDelegate {
         } completionHandler: {
             MainActor.assumeIsolated { completion?() }
         }
+    }
+
+    private func startClock() {
+        clockTask?.cancel()
+        clockTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.clockInterval)
+                guard !Task.isCancelled else { return }
+                self?.model.now = Date()
+            }
+        }
+    }
+
+    // MARK: - Keys
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
+        switch event.keyCode {
+        case 123: move(by: -1)                // ←
+        case 124: move(by: 1)                 // →
+        case 125: scroll(by: 1)               // ↓
+        case 126: scroll(by: -1)              // ↑
+        case 36, 76, 49: onRefresh?()         // Return, Enter, Space
+        default:
+            switch event.charactersIgnoringModifiers {
+            case "h": move(by: -1)
+            case "l": move(by: 1)
+            case "j": scroll(by: 1)
+            case "k": scroll(by: -1)
+            case "r", "R": onRefresh?()
+            default: return false
+            }
+        }
+        return true
+    }
+
+    private func move(by step: Int) {
+        model.cursorActive = true
+        model.cycle(by: step)
+        scrollToTop()
+    }
+
+    // MARK: - Scrolling
+
+    private var scrollView: NSScrollView? {
+        func find(_ view: NSView) -> NSScrollView? {
+            if let scrollView = view as? NSScrollView { return scrollView }
+            for subview in view.subviews {
+                if let found = find(subview) { return found }
+            }
+            return nil
+        }
+        return find(hostingView)
+    }
+
+    private func scroll(by steps: Int) {
+        guard let scrollView, let document = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let maxY = max(0, document.frame.height - clip.bounds.height)
+        let delta = CGFloat(steps) * Self.scrollStep * (document.isFlipped ? 1 : -1)
+        let y = min(maxY, max(0, clip.bounds.origin.y + delta))
+        clip.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    private func scrollToTop() {
+        guard let scrollView, let document = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let top = document.isFlipped ? 0 : max(0, document.frame.height - clip.bounds.height)
+        clip.scroll(to: NSPoint(x: 0, y: top))
+        scrollView.reflectScrolledClipView(clip)
     }
 
     // MARK: - Dismissal
@@ -120,19 +227,33 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 }
 
-private extension NSPoint {
-    /// KeyboardPanel rounds the card origin to whole pixels.
-    var rounded: NSPoint { NSPoint(x: x.rounded(), y: y.rounded()) }
+/// Tells the controller when SwiftUI's content changes size, so the panel can follow it.
+final class SizeReportingHostingView<Content: View>: NSHostingView<Content> {
+    var onIntrinsicSizeChange: (() -> Void)?
+
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        onIntrinsicSizeChange?()
+    }
 }
 
-/// Borderless panels refuse key status by default; this one needs it so resign-key can dismiss it.
+/// Borderless panels refuse key status by default; this one needs it for keys and resign-key.
 final class StatusPanel: NSPanel {
     var onCancel: (() -> Void)?
+    var onKey: ((NSEvent) -> Bool)?
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { // Esc
+            onCancel?()
+        } else if onKey?(event) != true {
+            super.keyDown(with: event)
+        }
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// An sRGB colour from a `#rrggbb` theme value.
@@ -25,6 +26,17 @@ struct ThemeColor: Sendable, Equatable {
     }
 
     var color: Color { Color(.sRGB, red: red, green: green, blue: blue) }
+
+    /// `Util.alpha(color, a)` / `Qt.rgba(c.r, c.g, c.b, a)`.
+    func color(opacity: Double) -> Color { Color(.sRGB, red: red, green: green, blue: blue, opacity: opacity) }
+
+    var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
+
+    /// Relative luminance, as `colorLuminance` in agents/Panel.qml computes it.
+    var luminance: Double {
+        func channel(_ c: Double) -> Double { c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
+    }
 }
 
 /// The Omarchy palette as the agents panel uses it (shell/Commons/Color.qml, shell/plugins/agents/Panel.qml).
@@ -43,6 +55,12 @@ struct OmarchyTheme: Sendable, Equatable {
     var popupBorder: ThemeColor { activeBorder }
     /// `dim` in agents/Panel.qml: `Qt.darker(foreground, 1.55)`.
     var dim: ThemeColor { foreground.darker(1.55) }
+    /// The dim of PanelHero and PanelSectionHeader: `Qt.darker(foreground, 1.4)`.
+    var headerDim: ThemeColor { foreground.darker(1.4) }
+    /// `Color.tooltip.border`: `hyprland.active-border-foreground`, which falls back to `foreground`.
+    var tooltipBorder: ThemeColor { hyprlandActiveBorderSet ? activeBorder : foreground }
+    /// Whether colors.toml sets `hyprland_active_border`; without it both border roles fall back.
+    var hyprlandActiveBorderSet: Bool { false }
 
     /// Omarchy's install default (install/user/theme.sh), from themes/tokyo-night/colors.toml.
     /// Phase 6 replaces this with a colors.toml parser.

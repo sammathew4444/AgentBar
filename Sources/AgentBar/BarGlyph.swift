@@ -12,15 +12,21 @@ enum BarGlyph {
     /// `Style.bar.iconFont` default in shell/Commons/Style.qml.
     static let fontSize: CGFloat = 13
 
-    static func apply(to button: NSStatusBarButton) {
+    /// - Parameter color: the bar's `active` colour while alarming. Nil leaves the glyph in the
+    ///   menu bar's own text colour: the macOS bar isn't painted with the theme background, so
+    ///   the theme foreground wouldn't read on it.
+    static func apply(to button: NSStatusBarButton, color: NSColor? = nil) {
         if let font = NSFont(name: fontName, size: fontSize) {
+            var attributes: [NSAttributedString.Key: Any] = [.font: font]
+            if let color { attributes[.foregroundColor] = color }
             button.image = nil
-            button.attributedTitle = NSAttributedString(string: robotGlyph, attributes: [.font: font])
+            button.attributedTitle = NSAttributedString(string: robotGlyph, attributes: attributes)
         } else {
             Logger.statusItem.error("Bar font \(fontName, privacy: .public) not found; using placeholder icon")
             let image = NSImage(systemSymbolName: "cpu", accessibilityDescription: "AgentBar")
-            image?.isTemplate = true
+            image?.isTemplate = color == nil
             button.image = image
+            button.contentTintColor = color
         }
     }
 }

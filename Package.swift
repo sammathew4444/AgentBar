@@ -9,5 +9,12 @@ let package = Package(
             name: "AgentBar",
             path: "Sources/AgentBar"
         ),
+        .testTarget(
+            name: "AgentBarTests",
+            dependencies: ["AgentBar"],
+            path: "Tests/AgentBarTests",
+            // Read from disk by path, not bundled as resources.
+            exclude: ["Fixtures"]
+        ),
     ]
 )

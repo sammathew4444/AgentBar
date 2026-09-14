@@ -1,31 +1,55 @@
 import AppKit
 import OSLog
 
-/// Owns the menu bar item and routes clicks and scrolls to their actions.
+/// Owns the menu bar item. Mirrors the BarIconButton in agents/Panel.qml: left click toggles the
+/// panel, right click launches the agent, middle click moves to the next subscription, and the
+/// glyph takes the urgent colour while the selected subscription is alarming. Scrolling also
+/// cycles, as the trackpad's stand-in for a middle click.
 @MainActor
 final class StatusItemController: NSObject {
     /// Accumulated trackpad scroll distance, in points, that counts as one cycle step.
     private static let trackpadScrollThreshold: CGFloat = 12
 
     private let statusItem: NSStatusItem
-    private let panel = PanelController(theme: .tokyoNight)
+    private let model: PanelModel
+    private let theme: OmarchyTheme
+    private let panel: PanelController
+    private let openIndicator: OpenPanelIndicator
     private var scrollMonitor: Any?
     private var scrollAccumulator: CGFloat = 0
     private var scrollGestureFired = false
 
-    override init() {
+    init(model: PanelModel, theme: OmarchyTheme, onPanelOpen: @escaping () -> Void, onRefresh: @escaping () -> Void) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.model = model
+        self.theme = theme
+        panel = PanelController(model: model, theme: theme)
+        openIndicator = OpenPanelIndicator(color: theme.accent.nsColor)
         super.init()
+        panel.onOpen = onPanelOpen
+        panel.onRefresh = onRefresh
+        panel.onOpenChange = { [weak self] open in self?.openIndicator.setOpen(open) }
+        model.onChange = { [weak self] in self?.updateButton() }
         configureButton()
         installScrollMonitor()
+        updateButton()
     }
 
     private func configureButton() {
         guard let button = statusItem.button else { return }
-        BarGlyph.apply(to: button)
         button.target = self
         button.action = #selector(buttonClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp, .otherMouseUp])
+        openIndicator.attach(to: button)
+    }
+
+    /// With nothing to report the module leaves the bar entirely, as Omarchy's does.
+    private func updateButton() {
+        let visible = !model.providers.isEmpty
+        if !visible { panel.close() }
+        statusItem.isVisible = visible
+        guard let button = statusItem.button else { return }
+        BarGlyph.apply(to: button, color: model.alarming ? theme.urgent.nsColor : nil)
     }
 
     @objc private func buttonClicked(_ sender: NSStatusBarButton) {
@@ -38,20 +62,15 @@ final class StatusItemController: NSObject {
         case .rightMouseUp:
             launchAgent()
         case .otherMouseUp where event.buttonNumber == 2:
-            cycleSubscription(step: 1)
+            model.cycle(by: 1)
         default:
             break
         }
     }
 
-    // MARK: - Actions
-
     private func launchAgent() {
-        Logger.statusItem.notice("Right click: launch agent (no-op until Phase 4)")
-    }
-
-    private func cycleSubscription(step: Int) {
-        Logger.statusItem.notice("Cycle subscription by \(step, privacy: .public) (no-op until Phase 4)")
+        panel.close()
+        AgentLauncher.launch()
     }
 
     // MARK: - Scroll
@@ -73,7 +92,7 @@ final class StatusItemController: NSObject {
         // Mouse wheel: every notch is one step.
         guard event.hasPreciseScrollingDeltas else {
             if event.scrollingDeltaY != 0 {
-                cycleSubscription(step: event.scrollingDeltaY > 0 ? -1 : 1)
+                model.cycle(by: event.scrollingDeltaY > 0 ? -1 : 1)
             }
             return
         }
@@ -87,7 +106,7 @@ final class StatusItemController: NSObject {
             scrollAccumulator += event.scrollingDeltaY
             if abs(scrollAccumulator) >= Self.trackpadScrollThreshold {
                 scrollGestureFired = true
-                cycleSubscription(step: scrollAccumulator > 0 ? -1 : 1)
+                model.cycle(by: scrollAccumulator > 0 ? -1 : 1)
             }
         }
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) {

@@ -26,6 +26,12 @@ shopt -s nullglob
 for f in "$ROOT"/Resources/Fonts/*.{ttf,otf} "$ROOT"/Resources/Fonts/OFL*; do
     cp "$f" "$APP/Contents/Resources/Fonts/"
 done
+
+# Agent marks from Omarchy's agents plugin (assets/<id>.svg), shown in the panel hero.
+mkdir -p "$APP/Contents/Resources/Agents"
+for f in "$ROOT"/Resources/Agents/*.svg; do
+    cp "$f" "$APP/Contents/Resources/Agents/"
+done
 shopt -u nullglob
 
 # Ad-hoc signature so the bundle launches locally. Developer ID signing lives in release.sh.
