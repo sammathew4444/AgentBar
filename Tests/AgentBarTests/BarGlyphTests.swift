@@ -47,6 +47,35 @@ struct BarGlyphTests {
         #expect(Double(maxX - minX + 1) / Double(scale) > 10)
     }
 
+    /// The gear and palette overhang their text advance by 2–3 units, which clipped the gear.
+    /// Drawn this way they sit whole and centred inside their square.
+    // HeroButtons.gear (md-cog) and ThemeButton.glyph (md-palette), spelled out because a test's
+    // arguments can't reach main-actor statics.
+    @Test("Panel icons fit whole and centred in their 16-unit square", arguments: ["\u{F0493}", "\u{F03D8}"])
+    func panelIcons(glyph: String) throws {
+        let image = try #require(BarGlyph.centredImage(glyph, fontSize: OmarchyStyle.FontSize.icon, canvas: 16, color: .black))
+        let scale = 4
+        let side = 16 * scale
+        let rep = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
+        NSGraphicsContext.restoreGraphicsState()
+
+        var minX = side, maxX = -1
+        for y in 0..<side {
+            for x in 0..<side where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1 {
+                minX = min(minX, x); maxX = max(maxX, x)
+            }
+        }
+        try #require(maxX >= 0, "nothing was drawn")
+        #expect(minX > 0 && maxX < side - 1, "the icon touches its edge: \(minX)…\(maxX) of \(side)")
+        #expect(abs(Double(minX + maxX + 1) / 2 - Double(side) / 2) <= 1)
+    }
+
     @Test("Normal is a template for the menu bar's own colour; alarming is painted urgent")
     func templateOnlyWhenNotAlarming() throws {
         #expect(try #require(BarGlyph.image(color: nil)).isTemplate)

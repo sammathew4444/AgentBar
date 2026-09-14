@@ -3,25 +3,31 @@ import OSLog
 
 /// A collector besides Claude's, refreshed alongside it.
 protocol UsageCollector: Sendable {
+    var agentID: String { get }
     /// `limitsOnly` is a panel opening: fresh limits, but a recent local scan may be reused.
     func refresh(force: Bool, limitsOnly: Bool) async
 }
 
 extension CodexCollector: UsageCollector {
+    var agentID: String { Self.agentID }
+
     func refresh(force: Bool, limitsOnly: Bool) async {
         await run(force: force, scanMaxAge: limitsOnly ? CodexLocalScanner.limitsOnlyReuse : CodexLocalScanner.scanReuse)
     }
 }
 
 extension GrokCollector: UsageCollector {
+    var agentID: String { Self.agentID }
+
     func refresh(force: Bool, limitsOnly: Bool) async {
         await run(force: force, scanMaxAge: limitsOnly ? GrokLocalScanner.limitsOnlyReuse : GrokLocalScanner.scanReuse)
     }
 }
 
 /// When collection runs. Mirrors Main.qml: a full refresh on start and every
-/// `refreshIntervalSec` (900 s), a limits refresh when the panel opens, one sooner retry 30 s
-/// after a collector advises it, and overlapping requests collapsed into one follow-up run.
+/// `refreshIntervalSec`, a limits refresh when the panel opens, one sooner retry 30 s after a
+/// collector advises it, overlapping requests collapsed into one follow-up run, and disabled
+/// agents skipped.
 @MainActor
 final class UsageRefresher {
     enum Kind: Int, Comparable {
@@ -30,15 +36,16 @@ final class UsageRefresher {
         static func < (a: Kind, b: Kind) -> Bool { a.rawValue < b.rawValue }
     }
 
-    /// `refreshIntervalSec` default in manifest.json.
-    static let refreshInterval: Duration = .seconds(900)
     /// Main.qml's `limitsRetry`.
     static let retryDelay: Duration = .seconds(30)
 
     var onRecordsChanged: (() -> Void)?
+    /// Omarchy's `providerEnabled`: a disabled agent isn't collected.
+    var isEnabled: (String) -> Bool = { _ in true }
 
     private let collector: ClaudeCollector
     private let others: [any UsageCollector]
+    private var interval: Duration
     private var gate = RefreshGate()
     private var running = false
     private var pending: Kind?
@@ -47,17 +54,43 @@ final class UsageRefresher {
     /// After a denial, only a person opening the panel or forcing a refresh asks again.
     private var keychainDenied = false
 
-    init(collector: ClaudeCollector, others: [any UsageCollector] = []) {
+    init(collector: ClaudeCollector, others: [any UsageCollector] = [], intervalSeconds: Int = AppSettings.defaultRefreshInterval) {
         self.collector = collector
         self.others = others
+        interval = .seconds(intervalSeconds)
     }
 
+    /// Runs now, then every interval (`triggeredOnStart`).
     func start() {
         guard timerTask == nil else { return }
+        scheduleTimer(runNow: true)
+    }
+
+    func stop() {
+        timerTask?.cancel()
+        timerTask = nil
+        retryTask?.cancel()
+        retryTask = nil
+    }
+
+    /// A new interval starts counting from now, as a Timer's does when its interval changes.
+    func setInterval(seconds: Int) {
+        interval = .seconds(seconds)
+        guard timerTask != nil else { return }
+        timerTask?.cancel()
+        scheduleTimer(runNow: false)
+    }
+
+    private func scheduleTimer(runNow: Bool) {
         timerTask = Task { [weak self] in
+            var first = runNow
             while !Task.isCancelled {
-                self?.request(.scheduled)
-                try? await Task.sleep(for: Self.refreshInterval)
+                if first {
+                    self?.request(.scheduled)
+                }
+                first = true
+                guard let interval = self?.interval else { return }
+                try? await Task.sleep(for: interval)
             }
         }
     }
@@ -80,25 +113,31 @@ final class UsageRefresher {
         // Opening the panel wants fresh limits, not another walk over every session file.
         let limitsOnly = kind == .panelOpened
         let force = kind == .forced
-        async let othersDone: Void = Self.refresh(others, force: force, limitsOnly: limitsOnly)
-        let outcome = await collector.run(
-            force: force,
-            keychainAllowed: !(keychainDenied && kind == .scheduled),
-            scanMaxAge: limitsOnly ? ClaudeLocalScanner.limitsOnlyReuse : ClaudeLocalScanner.scanReuse
-        )
-        await othersDone
-        keychainDenied = outcome.keychainDenied
-        if let retryAfter = outcome.retryAfter {
-            gate.rateLimited(until: Date().addingTimeInterval(retryAfter))
+        let enabledOthers = others.filter { isEnabled($0.agentID) }
+        async let othersDone: Void = Self.refresh(enabledOthers, force: force, limitsOnly: limitsOnly)
+        var outcome: ClaudeCollector.Outcome?
+        if isEnabled(ClaudeCollector.agentID) {
+            outcome = await collector.run(
+                force: force,
+                keychainAllowed: !(keychainDenied && kind == .scheduled),
+                scanMaxAge: limitsOnly ? ClaudeLocalScanner.limitsOnlyReuse : ClaudeLocalScanner.scanReuse
+            )
         }
+        await othersDone
 
         retryTask?.cancel()
         retryTask = nil
-        if outcome.record.retryAdvised {
-            retryTask = Task { [weak self] in
-                try? await Task.sleep(for: Self.retryDelay)
-                guard !Task.isCancelled else { return }
-                self?.request(.scheduled)
+        if let outcome {
+            keychainDenied = outcome.keychainDenied
+            if let retryAfter = outcome.retryAfter {
+                gate.rateLimited(until: Date().addingTimeInterval(retryAfter))
+            }
+            if outcome.record.retryAdvised {
+                retryTask = Task { [weak self] in
+                    try? await Task.sleep(for: Self.retryDelay)
+                    guard !Task.isCancelled else { return }
+                    self?.request(.scheduled)
+                }
             }
         }
 

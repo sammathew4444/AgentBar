@@ -6,10 +6,11 @@ import SwiftUI
 struct PanelView: View {
     let model: PanelModel
     let themeStore: ThemeStore
+    let settings: AppSettings
     /// Off only for rendering the full content to an image, which can't draw a scroll view.
     var scrollable = true
-    /// "Custom folder…" needs an open panel, which the controller owns.
-    var onChooseFolder: () -> Void = {}
+    /// Folder choosers need an open panel, which the controller owns.
+    var onChooseFolder: (FolderPurpose) -> Void = { _ in }
 
     /// The card's padding and border, top and bottom.
     static let verticalInsets: CGFloat = 2 * (OmarchyStyle.popupPadding + OmarchyStyle.popupBorderWidth)
@@ -17,14 +18,19 @@ struct PanelView: View {
     var body: some View {
         let theme = themeStore.current
         PanelCard(theme: theme) {
-            if scrollable {
-                // Omarchy caps the panel at Style.space(640) and scrolls past it; here the panel
-                // grows with its content and scrolls only when the screen itself runs out.
+            if scrollable && model.showingSettings {
+                // Only the settings page scrolls, and only once it outgrows the height cap.
                 ViewThatFits(in: .vertical) {
                     content(theme)
                     ScrollView(.vertical) { content(theme) }
                 }
                 .frame(maxHeight: model.maxContentHeight)
+            } else if scrollable {
+                // Omarchy caps the panel at Style.space(640) and scrolls past it; the usage page
+                // here never scrolls. It grows with its content, up to the same cap.
+                content(theme)
+                    .frame(maxHeight: model.maxContentHeight, alignment: .top)
+                    .clipped()
             } else {
                 content(theme)
             }
@@ -47,20 +53,43 @@ struct PanelView: View {
     }
 
     private func choose(_ option: ThemeStore.Option) {
-        if themeStore.choose(option) { onChooseFolder() }
+        if themeStore.choose(option) { onChooseFolder(.theme) }
     }
 
+    /// The hero on top, then either the usage or the settings page.
     private func content(_ theme: OmarchyTheme) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let provider = model.provider {
+                HeroView(record: provider, theme: theme, themeStore: themeStore, settingsActive: model.showingSettings, onSettings: toggleSettings)
+            } else {
+                // Only seen once agents are switched off here: the way back to settings stays.
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    HeroButtons(themeStore: themeStore, theme: theme, settingsActive: model.showingSettings, onSettings: toggleSettings)
+                }
+            }
+            if model.showingSettings {
+                SettingsView(settings: settings, theme: theme, onChooseFolder: onChooseFolder)
+            } else {
+                usageContent(theme)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func toggleSettings() {
+        themeStore.closePicker()
+        model.showingSettings.toggle()
+    }
+
+    private func usageContent(_ theme: OmarchyTheme) -> some View {
         let provider = model.provider
         let limits = PanelLogic.limitWindows(provider)
         let models = PanelLogic.modelRows(provider)
         let days = provider?.recentDays ?? []
 
         return VStack(alignment: .leading, spacing: 12) {
-            if let provider {
-                HeroView(record: provider, theme: theme, themeStore: themeStore)
-                    .zIndex(1)
-            } else {
+            if provider == nil {
                 Text("No AI coding subscriptions found.\nAgents show up here once you've used them.")
                     .font(OmarchyStyle.font(OmarchyStyle.FontSize.body))
                     .foregroundStyle(theme.dim.color)
@@ -119,6 +148,18 @@ struct PanelView: View {
                     }
                 }
             }
+
+            // `footerText`: only when the numbers cover more than this machine, or sync failed.
+            let footer = model.footerText
+            if !footer.isEmpty {
+                Text(footer)
+                    .font(OmarchyStyle.font(OmarchyStyle.FontSize.caption))
+                    .foregroundStyle(theme.dim.color)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -171,6 +212,8 @@ struct HeroView: View {
     let record: UsageRecord
     let theme: OmarchyTheme
     let themeStore: ThemeStore
+    let settingsActive: Bool
+    let onSettings: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -194,7 +237,45 @@ struct HeroView: View {
             }
             // PanelHero reserves the control's width plus Style.space(12).
             Spacer(minLength: 12)
+            HeroButtons(themeStore: themeStore, theme: theme, settingsActive: settingsActive, onSettings: onSettings)
+        }
+    }
+}
+
+/// The hero's trailing controls: the theme list and the settings page.
+struct HeroButtons: View {
+    /// Nerd Fonts `md-cog`.
+    static let gear = "\u{F0493}"
+
+    let themeStore: ThemeStore
+    let theme: OmarchyTheme
+    let settingsActive: Bool
+    let onSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
             ThemeButton(store: themeStore, theme: theme)
+            Button(action: onSettings) {
+                GlyphIcon(glyph: Self.gear)
+            }
+            .buttonStyle(IconButtonStyle(active: settingsActive, theme: theme))
+            .accessibilityLabel("Settings")
+        }
+    }
+}
+
+/// A Nerd Font icon at `Style.font.icon` in a 16-unit square (`Style.bar.iconCanvas`), centred
+/// by its outline as OpticalGlyph does, and tinted by the surrounding foreground style.
+struct GlyphIcon: View {
+    let glyph: String
+    var fontSize: CGFloat = OmarchyStyle.FontSize.icon
+    var canvas: CGFloat = BarGlyph.canvas
+
+    var body: some View {
+        if let image = BarGlyph.centredImage(glyph, fontSize: fontSize, canvas: canvas, color: nil) {
+            Image(nsImage: image).renderingMode(.template)
+        } else {
+            Text(glyph).font(OmarchyStyle.font(fontSize)).fixedSize()
         }
     }
 }
@@ -208,10 +289,8 @@ struct ProviderMark: View {
         if let image = Self.image(for: id, lightSurface: theme.popupBackground.luminance >= 0.5) {
             Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
         } else {
-            Text(BarGlyph.robotGlyph)
-                .font(.custom(BarGlyph.fontName, fixedSize: OmarchyStyle.FontSize.display))
+            GlyphIcon(glyph: BarGlyph.robotGlyph, fontSize: OmarchyStyle.FontSize.display, canvas: OmarchyStyle.FontSize.display)
                 .foregroundStyle(theme.foreground.color)
-                .fixedSize()
         }
     }
 
@@ -263,7 +342,7 @@ struct ThemeButton: View {
         Button {
             store.togglePicker()
         } label: {
-            Text(Self.glyph).font(OmarchyStyle.font(OmarchyStyle.FontSize.icon))
+            GlyphIcon(glyph: Self.glyph)
         }
         .buttonStyle(IconButtonStyle(active: store.pickerOpen, theme: theme))
         .anchorPreference(key: ThemeButtonAnchor.self, value: .bounds) { $0 }
