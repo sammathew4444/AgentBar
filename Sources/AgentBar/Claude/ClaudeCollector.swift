@@ -22,6 +22,7 @@ struct ClaudeCollector: Sendable {
     let store: RecordStore
     /// Holds `claude-limits.json`, the last successful probe. Never holds a token.
     let cacheDirectory: URL
+    let localScanner: ClaudeLocalScanner
     let now: @Sendable () -> Date
 
     init(
@@ -29,21 +30,24 @@ struct ClaudeCollector: Sendable {
         transport: any HTTPTransport = URLSessionTransport(),
         store: RecordStore = RecordStore(),
         cacheDirectory: URL = URL.cachesDirectory.appending(path: "AgentBar", directoryHint: .isDirectory),
+        localScanner: ClaudeLocalScanner? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.keychain = keychain
         self.transport = transport
         self.store = store
         self.cacheDirectory = cacheDirectory
+        self.localScanner = localScanner ?? .live(cacheDirectory: cacheDirectory)
         self.now = now
     }
 
     /// - Parameters:
-    ///   - force: skip the probe-reuse window, for a refresh a person asked for.
+    ///   - force: skip the probe-reuse window and rescan, for a refresh a person asked for.
     ///   - keychainAllowed: false to act as if access were denied without asking again.
+    ///   - scanMaxAge: how old a reused local scan may be; `force` makes it 0.
     @discardableResult
-    func run(force: Bool = false, keychainAllowed: Bool = true) async -> Outcome {
-        let outcome = await collect(force: force, keychainAllowed: keychainAllowed)
+    func run(force: Bool = false, keychainAllowed: Bool = true, scanMaxAge: TimeInterval = ClaudeLocalScanner.scanReuse) async -> Outcome {
+        let outcome = await collect(force: force, keychainAllowed: keychainAllowed, scanMaxAge: scanMaxAge)
         do {
             try store.write(outcome.record)
         } catch {
@@ -52,8 +56,9 @@ struct ClaudeCollector: Sendable {
         return outcome
     }
 
-    func collect(force: Bool, keychainAllowed: Bool) async -> Outcome {
+    func collect(force: Bool, keychainAllowed: Bool, scanMaxAge: TimeInterval = ClaudeLocalScanner.scanReuse) async -> Outcome {
         let start = now()
+        let stats = await localScanner.stats(now: start, maxAge: force ? 0 : scanMaxAge)
         var limits: [UsageRecord.Limit] = []
         var status = ""
         var help = Self.authHelp
@@ -115,11 +120,11 @@ struct ClaudeCollector: Sendable {
             status = "Waiting for auth"
         }
 
-        let record = UsageRecord(
+        var record = UsageRecord(
             id: Self.agentID,
             name: Self.agentName,
             updatedAt: OmarchyDate.isoformat(now()),
-            ready: !limits.isEmpty,
+            ready: stats.totalPrompts > 0 || !limits.isEmpty,
             hasLocalStats: true,
             tierLabel: plan,
             usageStatusText: status,
@@ -127,6 +132,7 @@ struct ClaudeCollector: Sendable {
             retryAdvised: retryAdvised,
             limits: limits
         )
+        record.apply(stats)
         return Outcome(record: record, keychainDenied: denied, retryAfter: retryAfter)
     }
 

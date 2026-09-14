@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let store = RecordStore()
         let model = PanelModel()
-        let refresher = UsageRefresher(collector: ClaudeCollector(store: store))
+        let refresher = UsageRefresher(collector: ClaudeCollector(store: store), codex: CodexCollector(store: store))
         self.refresher = refresher
 
         let reload: @MainActor () -> Void = { [weak model] in

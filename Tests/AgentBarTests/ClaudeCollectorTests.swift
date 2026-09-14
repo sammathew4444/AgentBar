@@ -83,14 +83,35 @@ struct ClaudeCollectorTests {
         """.utf8))
     }
 
-    private func collector(_ directory: URL, keychain: FakeKeychain, transport: FakeTransport, clock: TestClock) -> ClaudeCollector {
+    /// Local stats come from `claude` (a directory under Fixtures/local), or from nowhere at all:
+    /// a test must never scan the real ~/.claude.
+    private func collector(_ directory: URL, keychain: FakeKeychain, transport: FakeTransport, clock: TestClock, claude: String? = nil) -> ClaudeCollector {
         ClaudeCollector(
             keychain: keychain,
             transport: transport,
             store: RecordStore(directory: directory.appending(path: "records")),
             cacheDirectory: directory.appending(path: "cache"),
+            localScanner: ClaudeLocalScanner(
+                claudeDirectory: claude.map { ClaudeLocalScannerTests.local.appending(path: $0) } ?? directory.appending(path: "no-claude"),
+                piSessionRoots: [],
+                opencodeDatabase: directory.appending(path: "no-opencode.db"),
+                cacheDirectory: directory.appending(path: "cache"),
+                calendar: ClaudeLocalScannerTests.utc
+            ),
             now: { clock.now }
         )
+    }
+
+    @Test("Local stats land in the record, and make it ready without limits")
+    func localStats() async throws {
+        let temp = try TemporaryDirectory()
+        let outcome = await collector(temp.url, keychain: FakeKeychain(.notFound), transport: FakeTransport(), clock: TestClock(Self.start), claude: "claude").run()
+        #expect(outcome.record.ready)
+        #expect(outcome.record.usageStatusText == "Waiting for auth")
+        #expect(outcome.record.todayTotalTokens == 58793)
+        #expect(outcome.record.recentDays.count == 7)
+        #expect(outcome.record.modelUsage["claude-test"]?.total == 58793)
+        #expect(outcome.record.hasLocalStats)
     }
 
     @Test("A successful probe fills the record, caches the limits, and writes it through the store")
@@ -137,7 +158,8 @@ struct ClaudeCollectorTests {
             #expect(!contents.contains(Self.token), "\(path)")
             #expect(!contents.contains("refresh"), "\(path)")
         }
-        #expect(files == 2)
+        // The record, the limits cache and the local scan cache.
+        #expect(files == 3)
     }
 
     @Test("Not signed in: waiting for auth, and no request")

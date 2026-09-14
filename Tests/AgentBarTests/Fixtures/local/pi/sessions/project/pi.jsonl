@@ -1,0 +1,3 @@
+{"type":"message","id":"pi-1","timestamp":"2026-09-14T12:00:00Z","message":{"role":"assistant","provider":"anthropic","api":"anthropic-messages","model":"claude-pi","usage":{"input":10,"output":4,"cacheRead":3,"cacheWrite":2,"totalTokens":19}}}
+{"type":"message","id":"codex-1","timestamp":"2026-09-14T12:00:00Z","message":{"role":"assistant","provider":"openai-codex","model":"gpt-test","usage":{"input":999,"output":999}}}
+{"type":"message","id":"kimi-1","timestamp":"2026-09-14T12:00:00Z","message":{"role":"assistant","provider":"kimi-coding","api":"anthropic-messages","model":"k3","usage":{"input":999,"output":999}}}

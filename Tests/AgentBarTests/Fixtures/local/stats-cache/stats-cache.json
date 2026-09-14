@@ -1,0 +1,4 @@
+{"totalMessages":120,"totalSessions":9,
+ "dailyActivity":[{"date":"2026-09-12","messageCount":30,"sessionCount":2},{"date":"2026-09-13","messageCount":0,"sessionCount":0},{"date":"2026-09-14","messageCount":12,"sessionCount":1}],
+ "dailyModelTokens":[{"date":"2026-09-13","tokensByModel":{"claude-opus-5":500}},{"date":"2026-09-14","tokensByModel":{"claude-opus-5":1200,"claude-haiku-4-5":300}}],
+ "modelUsage":{"claude-opus-5":{"inputTokens":1000,"outputTokens":400,"cacheReadInputTokens":20000,"cacheCreationInputTokens":3000,"webSearchRequests":0}}}

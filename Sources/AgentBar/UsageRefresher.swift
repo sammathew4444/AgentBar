@@ -20,6 +20,7 @@ final class UsageRefresher {
     var onRecordsChanged: (() -> Void)?
 
     private let collector: ClaudeCollector
+    private let codex: CodexCollector?
     private var gate = RefreshGate()
     private var running = false
     private var pending: Kind?
@@ -28,8 +29,9 @@ final class UsageRefresher {
     /// After a denial, only a person opening the panel or forcing a refresh asks again.
     private var keychainDenied = false
 
-    init(collector: ClaudeCollector) {
+    init(collector: ClaudeCollector, codex: CodexCollector? = nil) {
         self.collector = collector
+        self.codex = codex
     }
 
     func start() {
@@ -57,10 +59,18 @@ final class UsageRefresher {
     }
 
     private func run(_ kind: Kind) async {
+        // Opening the panel wants fresh limits, not another walk over every session file.
+        let limitsOnly = kind == .panelOpened
+        async let codexRecord = codex?.run(
+            force: kind == .forced,
+            scanMaxAge: limitsOnly ? CodexLocalScanner.limitsOnlyReuse : CodexLocalScanner.scanReuse
+        )
         let outcome = await collector.run(
             force: kind == .forced,
-            keychainAllowed: !(keychainDenied && kind == .scheduled)
+            keychainAllowed: !(keychainDenied && kind == .scheduled),
+            scanMaxAge: limitsOnly ? ClaudeLocalScanner.limitsOnlyReuse : ClaudeLocalScanner.scanReuse
         )
+        _ = await codexRecord
         keychainDenied = outcome.keychainDenied
         if let retryAfter = outcome.retryAfter {
             gate.rateLimited(until: Date().addingTimeInterval(retryAfter))

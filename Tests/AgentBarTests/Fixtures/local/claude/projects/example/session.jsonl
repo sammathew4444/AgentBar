@@ -1,0 +1,5 @@
+{"timestamp":"2026-09-14T11:59:00Z","type":"user","sessionId":"session-1","uuid":"event-0","message":{"role":"user","content":"hello"}}
+{"timestamp":"2026-09-14T12:00:00Z","type":"assistant","sessionId":"session-1","uuid":"event-1","message":{"id":"message-1","role":"assistant","model":"claude-test","usage":{"input_tokens":2,"cache_creation_input_tokens":28857,"cache_read_input_tokens":0,"output_tokens":231}}}
+{"timestamp":"2026-09-14T12:00:00Z","type":"assistant","sessionId":"session-1","uuid":"event-2","message":{"id":"message-1","role":"assistant","model":"claude-test","usage":{"input_tokens":2,"cache_creation_input_tokens":28857,"cache_read_input_tokens":0,"output_tokens":231}}}
+{"timestamp":"2026-09-14T12:00:00Z","type":"assistant","sessionId":"session-1","uuid":"event-3","message":{"id":"message-2","role":"assistant","model":"claude-test","usage":{"input_tokens":2,"cache_creation_input_tokens":454,"cache_read_input_tokens":28857,"output_tokens":390}}}
+{not json "usage":
