@@ -27,6 +27,13 @@ for f in "$ROOT"/Resources/Fonts/*.{ttf,otf} "$ROOT"/Resources/Fonts/OFL*; do
     cp "$f" "$APP/Contents/Resources/Fonts/"
 done
 
+# Omarchy's themes (themes/<id>/colors.toml), offered by the panel's theme button.
+for f in "$ROOT"/Resources/Themes/*/colors.toml; do
+    theme="$(basename "$(dirname "$f")")"
+    mkdir -p "$APP/Contents/Resources/Themes/$theme"
+    cp "$f" "$APP/Contents/Resources/Themes/$theme/colors.toml"
+done
+
 # Agent marks from Omarchy's agents plugin (assets/<id>.svg), shown in the panel hero.
 mkdir -p "$APP/Contents/Resources/Agents"
 for f in "$ROOT"/Resources/Agents/*.svg; do

@@ -1,0 +1,3 @@
+{"sessionId":"cccc3333","updatedAt":"2026-09-13T08:00:00.000000+00:00",
+ "session":{"inputTokens":200,"outputTokens":20,"cachedReadTokens":0,"cacheCreationTokens":0,"reasoningTokens":0,"totalTokens":220,"modelCalls":1,"turnCount":1,"primaryModelId":"grok-4.5"},
+ "turns":[]}

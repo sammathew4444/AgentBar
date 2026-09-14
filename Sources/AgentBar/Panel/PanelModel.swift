@@ -13,6 +13,9 @@ final class PanelModel {
     var cursorActive = false
     /// Countdowns read this instead of the clock so an open panel keeps telling the truth.
     var now = Date()
+    /// The tallest the content may be: what the screen has room for. The panel only scrolls
+    /// past this, never at Omarchy's fixed 640 cap.
+    var maxContentHeight: CGFloat = .infinity
 
     /// Called after anything the bar icon depends on changes.
     @ObservationIgnored var onChange: (() -> Void)?

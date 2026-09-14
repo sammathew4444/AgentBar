@@ -6,7 +6,7 @@ import SwiftUI
 /// Borderless, non-activating panel that drops down from the status item.
 /// Placement and fade follow Omarchy's KeyboardPanel (shell/Ui/KeyboardPanel.qml) for a top bar:
 /// centred on the icon, `gapsOut` below the bar, clamped `gapsOut` from the screen edges.
-/// Keys follow PanelKeyCatcher as agents/Panel.qml wires it.
+/// Keys follow PanelKeyCatcher as agents/Panel.qml wires it, and Dropdown while the theme list is open.
 @MainActor
 final class PanelController: NSObject, NSWindowDelegate {
     /// `Easing.OutCubic`.
@@ -26,18 +26,22 @@ final class PanelController: NSObject, NSWindowDelegate {
     var onOpenChange: ((Bool) -> Void)?
 
     private let model: PanelModel
+    private let themeStore: ThemeStore
     private let panel: StatusPanel
     private let hostingView: SizeReportingHostingView<PanelView>
     private weak var anchorButton: NSStatusBarButton?
     private var outsideClickMonitor: Any?
     private var clockTask: Task<Void, Never>?
     private var lastDismissal = Date.distantPast
+    /// Resizing the window re-lays out the content, which reports its size again.
+    private var repositioning = false
     /// Logical open state. The window stays visible a little longer while it fades out.
     private(set) var isOpen = false
 
-    init(model: PanelModel, theme: OmarchyTheme) {
+    init(model: PanelModel, themeStore: ThemeStore) {
         self.model = model
-        hostingView = SizeReportingHostingView(rootView: PanelView(model: model, theme: theme))
+        self.themeStore = themeStore
+        hostingView = SizeReportingHostingView(rootView: PanelView(model: model, themeStore: themeStore))
         hostingView.sizingOptions = [.intrinsicContentSize]
         panel = StatusPanel(
             contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
@@ -47,6 +51,9 @@ final class PanelController: NSObject, NSWindowDelegate {
         )
         super.init()
 
+        hostingView.rootView = PanelView(model: model, themeStore: themeStore, onChooseFolder: { [weak self] in
+            self?.chooseThemeFolder()
+        })
         panel.level = .statusBar
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
@@ -62,8 +69,9 @@ final class PanelController: NSObject, NSWindowDelegate {
         panel.onCancel = { [weak self] in self?.close() }
         panel.onKey = { [weak self] event in self?.handleKey(event) ?? false }
         hostingView.onIntrinsicSizeChange = { [weak self] in
-            // Let SwiftUI finish the pass that changed the size before moving the window.
-            DispatchQueue.main.async { self?.reposition() }
+            // In the same pass, before AppKit resizes the window from its bottom edge: a later
+            // correction shows as the panel dropping and jumping back when content changes height.
+            self?.reposition()
         }
     }
 
@@ -81,6 +89,8 @@ final class PanelController: NSObject, NSWindowDelegate {
         onOpenChange?(true)
         model.cursorActive = false
         model.now = Date()
+        model.maxContentHeight = Self.availableContentHeight(below: button)
+        themeStore.reloadFolderTheme()
         if !panel.isVisible { panel.alphaValue = 0 }
         reposition()
         panel.makeKeyAndOrderFront(nil)
@@ -96,6 +106,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard isOpen else { return }
         isOpen = false
         onOpenChange?(false)
+        themeStore.closePicker()
         lastDismissal = Date()
         removeOutsideClickMonitor()
         clockTask?.cancel()
@@ -107,9 +118,20 @@ final class PanelController: NSObject, NSWindowDelegate {
         Logger.panel.debug("Panel closed")
     }
 
-    /// Sizes the panel to its content and places it under the icon.
+    /// Room for the content between the gap under the menu bar and a margin above the Dock or
+    /// the screen's bottom edge, less the card's insets.
+    private static func availableContentHeight(below button: NSStatusBarButton) -> CGFloat {
+        guard let barWindow = button.window, let screen = barWindow.screen ?? NSScreen.main else { return .infinity }
+        let top = min(barWindow.frame.minY, screen.visibleFrame.maxY) - OmarchyStyle.gapsOut
+        let bottom = screen.visibleFrame.minY + OmarchyStyle.gapsOut
+        return max(120, top - bottom - PanelView.verticalInsets)
+    }
+
+    /// Sizes the panel to its content and places it under the icon, top edge fixed.
     private func reposition() {
-        guard let button = anchorButton, let barWindow = button.window, let screen = barWindow.screen ?? NSScreen.main else { return }
+        guard !repositioning, let button = anchorButton, let barWindow = button.window, let screen = barWindow.screen ?? NSScreen.main else { return }
+        repositioning = true
+        defer { repositioning = false }
         let anchor = barWindow.convertToScreen(button.convert(button.bounds, to: nil))
         let size = hostingView.fittingSize
         let margin = OmarchyStyle.gapsOut
@@ -142,11 +164,41 @@ final class PanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    // MARK: - Theme folder
+
+    /// "Custom folder…": a standard folder chooser. The app has to come forward for it, which
+    /// closes the panel; the chosen theme applies straight away.
+    private func chooseThemeFolder() {
+        close()
+        NSApp.activate()
+        let chooser = NSOpenPanel()
+        chooser.canChooseDirectories = true
+        chooser.canChooseFiles = false
+        chooser.allowsMultipleSelection = false
+        chooser.prompt = "Use Theme"
+        chooser.message = "Choose an Omarchy theme folder containing colors.toml."
+        let omarchyThemes = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/omarchy/themes", directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: omarchyThemes.path(percentEncoded: false)) { chooser.directoryURL = omarchyThemes }
+        chooser.begin { [weak self] response in
+            MainActor.assumeIsolated {
+                guard response == .OK, let folder = chooser.url, let self else { return }
+                if !self.themeStore.useFolder(folder) {
+                    let alert = NSAlert()
+                    alert.messageText = "No colors.toml in “\(folder.lastPathComponent)”"
+                    alert.informativeText = "Choose an Omarchy theme folder, such as one from ~/.config/omarchy/themes."
+                    alert.runModal()
+                }
+            }
+        }
+    }
+
     // MARK: - Keys
 
     private func handleKey(_ event: NSEvent) -> Bool {
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
+        if themeStore.pickerOpen { return handlePickerKey(event) }
         switch event.keyCode {
+        case 53: close()                      // Esc
         case 123: move(by: -1)                // ←
         case 124: move(by: 1)                 // →
         case 125: scroll(by: 1)               // ↓
@@ -162,6 +214,25 @@ final class PanelController: NSObject, NSWindowDelegate {
             default: return false
             }
         }
+        return true
+    }
+
+    /// Dropdown's list: j/k and ↑/↓ walk, Enter picks, Esc closes the list and keeps the panel.
+    private func handlePickerKey(_ event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 53: themeStore.closePicker()
+        case 125: themeStore.movePicker(by: 1)
+        case 126: themeStore.movePicker(by: -1)
+        case 36, 76:
+            if themeStore.chooseHighlighted() { chooseThemeFolder() }
+        default:
+            switch event.charactersIgnoringModifiers {
+            case "j": themeStore.movePicker(by: 1)
+            case "k": themeStore.movePicker(by: -1)
+            default: break
+            }
+        }
+        // The open list owns the keyboard, as its ListView holds focus in Omarchy.
         return true
     }
 
@@ -249,10 +320,12 @@ final class StatusPanel: NSPanel {
         onCancel?()
     }
 
+    /// Keys go to the controller first, so an open theme list can take Esc for itself.
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { // Esc
+        if onKey?(event) == true { return }
+        if event.keyCode == 53 {
             onCancel?()
-        } else if onKey?(event) != true {
+        } else {
             super.keyDown(with: event)
         }
     }

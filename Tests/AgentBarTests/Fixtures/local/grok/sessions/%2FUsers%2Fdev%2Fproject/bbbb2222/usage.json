@@ -1,0 +1,5 @@
+{"sessionId":"bbbb2222","updatedAt":"2026-09-14T14:00:00.000000+00:00",
+ "session":{"inputTokens":750,"outputTokens":75,"cachedReadTokens":500,"cacheCreationTokens":10,"reasoningTokens":30,"totalTokens":825,"modelCalls":3,"turnCount":2,"primaryModelId":"grok-4.6-build"},
+ "turns":[
+  {"turnNumber":2,"endedAt":"2026-09-14T12:30:00.000000+00:00","inputTokens":700,"outputTokens":70,"cachedReadTokens":500,"cacheCreationTokens":0,"reasoningTokens":30,"totalTokens":770,"modelCalls":2,"turnCount":1,"primaryModelId":"grok-4.6-build"},
+  {"turnNumber":3,"endedAt":"2026-09-14T14:00:00.000000+00:00","inputTokens":50,"outputTokens":5,"cachedReadTokens":0,"cacheCreationTokens":10,"reasoningTokens":0,"totalTokens":55,"modelCalls":1,"turnCount":1,"primaryModelId":"grok-4.6-build"}]}

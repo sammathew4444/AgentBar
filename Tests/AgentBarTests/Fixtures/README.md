@@ -34,3 +34,13 @@ Codex, from Omarchy's `agent-usage-codex-scanner-test.sh`:
 - `local/codex-bin/codex` — a POSIX shell stand-in for `codex app-server` that answers the three
   JSON-RPC requests with `CODEX_ACCOUNT` / `CODEX_RATE_LIMITS`, stays silent with `CODEX_SILENT`,
   and records its arguments to `CODEX_ARGS_FILE`. It needs only `sed` and `printf`.
+
+Grok (no Omarchy collector exists; shapes follow Grok CLI 1.0.24's own files and docs):
+
+- `local/grok/sessions/<encoded-cwd>/<id>/usage.json` — three sessions: one with two turns on
+  different days and models, a fork repeating one of those turns plus a new one, and one with
+  session totals but no turn list. A subagent session with huge numbers sits below the first
+  and must not be read.
+- `local/grok/logs/unified.jsonl` — `billing: fetched credits config` lines, the newest with
+  `creditUsagePercent` 15 over a 7-day period, followed by an unrelated line that only mentions
+  the message in its text.

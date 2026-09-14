@@ -38,6 +38,11 @@ final class OpenPanelIndicator: NSView {
         ])
     }
 
+    /// `Color.accent` of the current theme.
+    func setColor(_ color: NSColor) {
+        layer?.backgroundColor = color.cgColor
+    }
+
     /// 120 ms, `Easing.OutCubic`.
     func setOpen(_ open: Bool) {
         NSAnimationContext.runAnimationGroup { context in

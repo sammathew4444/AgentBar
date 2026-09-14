@@ -1,6 +1,24 @@
 import Foundation
 import OSLog
 
+/// A collector besides Claude's, refreshed alongside it.
+protocol UsageCollector: Sendable {
+    /// `limitsOnly` is a panel opening: fresh limits, but a recent local scan may be reused.
+    func refresh(force: Bool, limitsOnly: Bool) async
+}
+
+extension CodexCollector: UsageCollector {
+    func refresh(force: Bool, limitsOnly: Bool) async {
+        await run(force: force, scanMaxAge: limitsOnly ? CodexLocalScanner.limitsOnlyReuse : CodexLocalScanner.scanReuse)
+    }
+}
+
+extension GrokCollector: UsageCollector {
+    func refresh(force: Bool, limitsOnly: Bool) async {
+        await run(force: force, scanMaxAge: limitsOnly ? GrokLocalScanner.limitsOnlyReuse : GrokLocalScanner.scanReuse)
+    }
+}
+
 /// When collection runs. Mirrors Main.qml: a full refresh on start and every
 /// `refreshIntervalSec` (900 s), a limits refresh when the panel opens, one sooner retry 30 s
 /// after a collector advises it, and overlapping requests collapsed into one follow-up run.
@@ -20,7 +38,7 @@ final class UsageRefresher {
     var onRecordsChanged: (() -> Void)?
 
     private let collector: ClaudeCollector
-    private let codex: CodexCollector?
+    private let others: [any UsageCollector]
     private var gate = RefreshGate()
     private var running = false
     private var pending: Kind?
@@ -29,9 +47,9 @@ final class UsageRefresher {
     /// After a denial, only a person opening the panel or forcing a refresh asks again.
     private var keychainDenied = false
 
-    init(collector: ClaudeCollector, codex: CodexCollector? = nil) {
+    init(collector: ClaudeCollector, others: [any UsageCollector] = []) {
         self.collector = collector
-        self.codex = codex
+        self.others = others
     }
 
     func start() {
@@ -61,16 +79,14 @@ final class UsageRefresher {
     private func run(_ kind: Kind) async {
         // Opening the panel wants fresh limits, not another walk over every session file.
         let limitsOnly = kind == .panelOpened
-        async let codexRecord = codex?.run(
-            force: kind == .forced,
-            scanMaxAge: limitsOnly ? CodexLocalScanner.limitsOnlyReuse : CodexLocalScanner.scanReuse
-        )
+        let force = kind == .forced
+        async let othersDone: Void = Self.refresh(others, force: force, limitsOnly: limitsOnly)
         let outcome = await collector.run(
-            force: kind == .forced,
+            force: force,
             keychainAllowed: !(keychainDenied && kind == .scheduled),
             scanMaxAge: limitsOnly ? ClaudeLocalScanner.limitsOnlyReuse : ClaudeLocalScanner.scanReuse
         )
-        _ = await codexRecord
+        await othersDone
         keychainDenied = outcome.keychainDenied
         if let retryAfter = outcome.retryAfter {
             gate.rateLimited(until: Date().addingTimeInterval(retryAfter))
@@ -91,6 +107,14 @@ final class UsageRefresher {
         if let next = pending {
             pending = nil
             request(next)
+        }
+    }
+
+    private nonisolated static func refresh(_ collectors: [any UsageCollector], force: Bool, limitsOnly: Bool) async {
+        await withTaskGroup(of: Void.self) { group in
+            for collector in collectors {
+                group.addTask { await collector.refresh(force: force, limitsOnly: limitsOnly) }
+            }
         }
     }
 }

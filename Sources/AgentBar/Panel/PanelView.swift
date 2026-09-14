@@ -5,28 +5,52 @@ import SwiftUI
 /// limits, tokens by day, tokens by model. Sizes are Style.qml tokens at their defaults.
 struct PanelView: View {
     let model: PanelModel
-    let theme: OmarchyTheme
+    let themeStore: ThemeStore
     /// Off only for rendering the full content to an image, which can't draw a scroll view.
     var scrollable = true
+    /// "Custom folder…" needs an open panel, which the controller owns.
+    var onChooseFolder: () -> Void = {}
 
-    /// `fittedContentHeight(column.implicitHeight, Style.space(640))`, less the card's insets.
-    static let maxContentHeight: CGFloat = 640 - 2 * (OmarchyStyle.popupPadding + OmarchyStyle.popupBorderWidth)
+    /// The card's padding and border, top and bottom.
+    static let verticalInsets: CGFloat = 2 * (OmarchyStyle.popupPadding + OmarchyStyle.popupBorderWidth)
 
     var body: some View {
+        let theme = themeStore.current
         PanelCard(theme: theme) {
             if scrollable {
+                // Omarchy caps the panel at Style.space(640) and scrolls past it; here the panel
+                // grows with its content and scrolls only when the screen itself runs out.
                 ViewThatFits(in: .vertical) {
-                    content
-                    ScrollView(.vertical) { content }
+                    content(theme)
+                    ScrollView(.vertical) { content(theme) }
                 }
-                .frame(maxHeight: Self.maxContentHeight)
+                .frame(maxHeight: model.maxContentHeight)
             } else {
-                content
+                content(theme)
+            }
+        }
+        .overlayPreferenceValue(ThemeButtonAnchor.self) { anchor in
+            if themeStore.pickerOpen, let anchor {
+                GeometryReader { geometry in
+                    let button = geometry[anchor]
+                    ZStack(alignment: .topLeading) {
+                        // A click anywhere else in the panel closes the list, as a Popup does.
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { themeStore.closePicker() }
+                        ThemePickerList(store: themeStore, theme: theme, scrollable: scrollable, onChoose: choose)
+                            .offset(x: button.maxX - ThemePickerList.outerWidth, y: button.maxY + 2)
+                    }
+                }
             }
         }
     }
 
-    private var content: some View {
+    private func choose(_ option: ThemeStore.Option) {
+        if themeStore.choose(option) { onChooseFolder() }
+    }
+
+    private func content(_ theme: OmarchyTheme) -> some View {
         let provider = model.provider
         let limits = PanelLogic.limitWindows(provider)
         let models = PanelLogic.modelRows(provider)
@@ -34,7 +58,8 @@ struct PanelView: View {
 
         return VStack(alignment: .leading, spacing: 12) {
             if let provider {
-                HeroView(record: provider, theme: theme)
+                HeroView(record: provider, theme: theme, themeStore: themeStore)
+                    .zIndex(1)
             } else {
                 Text("No AI coding subscriptions found.\nAgents show up here once you've used them.")
                     .font(OmarchyStyle.font(OmarchyStyle.FontSize.body))
@@ -102,7 +127,7 @@ struct PanelView: View {
 // MARK: - Chrome
 
 /// KeyboardPanel's card: a BorderSurface filled with the popup background, its border drawn
-/// inside the bounds as Qt's Rectangle does, with padding inside that.
+/// inside the bounds (solid, or the theme's gradient), with padding inside that.
 struct PanelCard<Content: View>: View {
     let theme: OmarchyTheme
     @ViewBuilder let content: Content
@@ -112,10 +137,7 @@ struct PanelCard<Content: View>: View {
             .padding(OmarchyStyle.popupPadding + OmarchyStyle.popupBorderWidth)
             .frame(width: OmarchyStyle.panelWidth)
             .background(theme.popupBackground.color)
-            .overlay(
-                RoundedRectangle(cornerRadius: OmarchyStyle.cornerRadius)
-                    .strokeBorder(theme.popupBorder.color, lineWidth: OmarchyStyle.popupBorderWidth)
-            )
+            .overlay(BorderRing(paint: theme.popupBorder, width: OmarchyStyle.popupBorderWidth))
     }
 }
 
@@ -143,29 +165,36 @@ struct SectionHeader: View {
 
 // MARK: - Hero
 
-/// PanelHero: the provider's mark, its name, and the plan (or the status) in small caps.
+/// PanelHero: the provider's mark, its name, and the plan (or the status) in small caps, with
+/// the theme button in the hero's `trailingControl` slot, centred against the labels.
 struct HeroView: View {
     let record: UsageRecord
     let theme: OmarchyTheme
+    let themeStore: ThemeStore
 
     var body: some View {
-        HStack(spacing: 14) {
-            ProviderMark(id: record.id, theme: theme)
-                .frame(width: OmarchyStyle.FontSize.display, height: OmarchyStyle.FontSize.display)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(record.name)
-                    .font(OmarchyStyle.font(OmarchyStyle.FontSize.title, bold: true))
-                    .foregroundStyle(theme.foreground.color)
-                    .lineLimit(1)
-                let meta = PanelLogic.heroMeta(record).uppercased()
-                if !meta.isEmpty {
-                    Text(meta)
-                        .font(OmarchyStyle.font(OmarchyStyle.FontSize.caption, bold: true))
-                        .kerning(1.2)
-                        .foregroundStyle(theme.headerDim.color)
+        HStack(spacing: 0) {
+            HStack(spacing: 14) {
+                ProviderMark(id: record.id, theme: theme)
+                    .frame(width: OmarchyStyle.FontSize.display, height: OmarchyStyle.FontSize.display)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.name)
+                        .font(OmarchyStyle.font(OmarchyStyle.FontSize.title, bold: true))
+                        .foregroundStyle(theme.foreground.color)
                         .lineLimit(1)
+                    let meta = PanelLogic.heroMeta(record).uppercased()
+                    if !meta.isEmpty {
+                        Text(meta)
+                            .font(OmarchyStyle.font(OmarchyStyle.FontSize.caption, bold: true))
+                            .kerning(1.2)
+                            .foregroundStyle(theme.headerDim.color)
+                            .lineLimit(1)
+                    }
                 }
             }
+            // PanelHero reserves the control's width plus Style.space(12).
+            Spacer(minLength: 12)
+            ThemeButton(store: themeStore, theme: theme)
         }
     }
 }
@@ -210,6 +239,128 @@ struct ProviderMark: View {
     }
 }
 
+// MARK: - Theme button and list
+
+/// Where the theme button sits, so the list can open beneath it.
+private struct ThemeButtonAnchor: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+/// A borderless icon Button (shell/Ui/Button.qml) with `md-palette`, shown as hot while its
+/// list is open, as Dropdown's trigger is while focused.
+struct ThemeButton: View {
+    /// Nerd Fonts `md-palette`.
+    static let glyph = "\u{F03D8}"
+
+    let store: ThemeStore
+    let theme: OmarchyTheme
+
+    var body: some View {
+        Button {
+            store.togglePicker()
+        } label: {
+            Text(Self.glyph).font(OmarchyStyle.font(OmarchyStyle.FontSize.icon))
+        }
+        .buttonStyle(IconButtonStyle(active: store.pickerOpen, theme: theme))
+        .anchorPreference(key: ThemeButtonAnchor.self, value: .bounds) { $0 }
+        .accessibilityLabel("Theme")
+    }
+}
+
+/// Button.qml without `bordered`: nothing at rest, the hover fill and cursor border when hot,
+/// the pressed fill while held. The border's space is always reserved, so nothing shifts.
+struct IconButtonStyle: ButtonStyle {
+    let active: Bool
+    let theme: OmarchyTheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        IconBody(configuration: configuration, active: active, theme: theme)
+    }
+
+    private struct IconBody: View {
+        let configuration: ButtonStyleConfiguration
+        let active: Bool
+        let theme: OmarchyTheme
+        @State private var hovering = false
+
+        var body: some View {
+            let hot = hovering || active
+            configuration.label
+                .foregroundStyle(theme.foreground.color)
+                .padding(.horizontal, 10 + 1)
+                .padding(.vertical, 6 + 1)
+                .background(theme.foreground.color(opacity: configuration.isPressed ? 0.22 : hot ? 0.08 : 0))
+                .overlay(Rectangle().strokeBorder(theme.foreground.color(opacity: hot ? 0.25 : 0), lineWidth: 1))
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// Dropdown.qml's popup: the popup surface with a 1px popup border, 28-unit rows 4 apart, the
+/// highlighted row in the hover fill, at most eight rows before it scrolls.
+struct ThemePickerList: View {
+    static let rowHeight: CGFloat = 28
+    static let rowGap: CGFloat = 4
+    /// `Style.spacing.dropdownWidth`.
+    static let width: CGFloat = 240
+    /// Border plus `Style.spacing.hairline`, each side.
+    static let inset: CGFloat = 1 + 1
+    static var outerWidth: CGFloat { width + inset * 2 }
+
+    let store: ThemeStore
+    let theme: OmarchyTheme
+    /// Off only for rendering to an image: every row in a plain stack instead of a scroll view.
+    var scrollable = true
+    let onChoose: (ThemeStore.Option) -> Void
+
+    var body: some View {
+        let options = store.options
+        let visible = CGFloat(min(options.count, 8))
+        Group {
+            if scrollable {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        rows(options)
+                    }
+                    .frame(width: Self.width, height: visible * Self.rowHeight + max(0, visible - 1) * Self.rowGap)
+                    .onAppear { proxy.scrollTo(store.pickerIndex, anchor: .center) }
+                    .onChange(of: store.pickerIndex) { _, index in proxy.scrollTo(index) }
+                }
+            } else {
+                rows(options).frame(width: Self.width)
+            }
+        }
+        .padding(Self.inset)
+        .background(theme.popupBackground.color)
+        .overlay(BorderRing(paint: theme.popupBorder, width: 1))
+    }
+
+    private func rows(_ options: [ThemeStore.Option]) -> some View {
+        VStack(spacing: Self.rowGap) {
+            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                Text(option.title)
+                    .font(OmarchyStyle.font(OmarchyStyle.FontSize.body))
+                    .foregroundStyle(theme.foreground.color)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: Self.rowHeight)
+                    .background(index == store.pickerIndex ? theme.foreground.color(opacity: 0.08) : .clear)
+                    .contentShape(Rectangle())
+                    .onHover { if $0 { store.pickerIndex = index } }
+                    .onTapGesture { onChoose(option) }
+                    .id(index)
+            }
+        }
+    }
+}
+
 // MARK: - Provider switch
 
 /// One chip per agent, sharing the row equally (Button with `bordered` and `selected`).
@@ -235,8 +386,10 @@ struct ProviderSwitch: View {
     }
 }
 
-/// Button.qml's paint order: pressed, then hover or keyboard cursor, then selected, then idle.
-/// Fills and borders are the [controls] defaults from shell.toml.tpl.
+/// Button.qml's fills and borders, the [controls] defaults from shell.toml.tpl. One change to its
+/// paint order: there hover or the keyboard cursor beats selected, so the active chip drops to the
+/// 8% hover fill as soon as the pointer has been over the row and barely stands out. Here the
+/// active chip keeps the 18% selected fill and its normal border; hover lightens only the others.
 struct ChipStyle: ButtonStyle {
     let selected: Bool
     let hasCursor: Bool
@@ -255,10 +408,10 @@ struct ChipStyle: ButtonStyle {
 
         var body: some View {
             let hot = hovering || hasCursor
-            let fill: Double = configuration.isPressed ? 0.22 : hot ? 0.08 : selected ? 0.18 : 0
-            // Hover uses the cursor border; otherwise a bordered button keeps its normal border,
-            // selected included, because selected-border-width is 0.
-            let borderAlpha = hot ? 0.25 : 0.4
+            let fill: Double = configuration.isPressed ? 0.22 : selected ? 0.18 : hot ? 0.08 : 0
+            // An inactive chip under the cursor takes the cursor border; otherwise a bordered
+            // button keeps its normal border, selected included, since selected-border-width is 0.
+            let borderAlpha = hot && !selected ? 0.25 : 0.4
 
             configuration.label
                 .font(OmarchyStyle.font(OmarchyStyle.FontSize.bodySmall, bold: selected))
@@ -270,7 +423,6 @@ struct ChipStyle: ButtonStyle {
                 .background(theme.foreground.color(opacity: fill))
                 .overlay(Rectangle().strokeBorder(theme.foreground.color(opacity: borderAlpha), lineWidth: 1))
                 .contentShape(Rectangle())
-                .animation(.linear(duration: 0.12), value: fill)
                 .onHover { hovering = $0 }
         }
     }
@@ -363,6 +515,7 @@ struct LimitRow: View {
 }
 
 /// A rounded track, filled to the share of the allowance used (or the credit left).
+/// Static: Omarchy animates the fill width, but switching agents here redraws in place.
 struct Meter: View {
     let value: Double
     let alarming: Bool
@@ -382,7 +535,6 @@ struct Meter: View {
             }
         }
         .frame(height: Self.thickness)
-        .animation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.16), value: value)
     }
 }
 
@@ -414,7 +566,6 @@ struct DayRow: View {
             .frame(height: Meter.thickness)
             .padding(.leading, 8)
             .padding(.trailing, 10)
-            .animation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.16), value: ratio)
             Text(PanelLogic.formatTokenCount(day.messageCount))
                 .font(OmarchyStyle.font(OmarchyStyle.FontSize.caption, bold: true))
                 .foregroundStyle(color)
@@ -455,7 +606,6 @@ struct ModelRowView: View {
                 }
             }
         }
-        .animation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.16), value: share)
         .panelToolTip(PanelLogic.modelTooltip(row), theme: theme)
     }
 }
@@ -489,7 +639,7 @@ private struct PanelToolTip: ViewModifier {
                         .padding(.horizontal, 10 + 1)
                         .padding(.vertical, 6 + 1)
                         .background(theme.background.color(opacity: 0.97))
-                        .overlay(Rectangle().strokeBorder(theme.tooltipBorder.color, lineWidth: 1))
+                        .overlay(BorderRing(paint: theme.tooltipBorder, width: 1))
                         .fixedSize()
                         .alignmentGuide(.top) { $0[.bottom] + 3 }
                         .allowsHitTesting(false)

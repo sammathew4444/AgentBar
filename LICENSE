@@ -23,8 +23,9 @@ SOFTWARE.
 --------------------------------------------------------------------------------
 
 Portions derived from Omarchy (MIT), https://github.com/basecamp/omarchy
-Includes the files under reference/source/ and reference/theme/, and the agent
-marks in Resources/Agents/ (from shell/plugins/agents/assets/).
+Includes the files under reference/source/ and reference/theme/, the agent
+marks in Resources/Agents/ (from shell/plugins/agents/assets/), and the theme
+colours in Resources/Themes/ (from themes/).
 
 Copyright (c) David Heinemeier Hansson
 

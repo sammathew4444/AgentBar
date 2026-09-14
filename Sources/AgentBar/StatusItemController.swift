@@ -12,24 +12,29 @@ final class StatusItemController: NSObject {
 
     private let statusItem: NSStatusItem
     private let model: PanelModel
-    private let theme: OmarchyTheme
+    private let themeStore: ThemeStore
     private let panel: PanelController
     private let openIndicator: OpenPanelIndicator
     private var scrollMonitor: Any?
     private var scrollAccumulator: CGFloat = 0
     private var scrollGestureFired = false
 
-    init(model: PanelModel, theme: OmarchyTheme, onPanelOpen: @escaping () -> Void, onRefresh: @escaping () -> Void) {
+    init(model: PanelModel, themeStore: ThemeStore, onPanelOpen: @escaping () -> Void, onRefresh: @escaping () -> Void) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.model = model
-        self.theme = theme
-        panel = PanelController(model: model, theme: theme)
-        openIndicator = OpenPanelIndicator(color: theme.accent.nsColor)
+        self.themeStore = themeStore
+        panel = PanelController(model: model, themeStore: themeStore)
+        openIndicator = OpenPanelIndicator(color: themeStore.current.accent.nsColor)
         super.init()
         panel.onOpen = onPanelOpen
         panel.onRefresh = onRefresh
         panel.onOpenChange = { [weak self] open in self?.openIndicator.setOpen(open) }
         model.onChange = { [weak self] in self?.updateButton() }
+        themeStore.onChange = { [weak self] in
+            guard let self else { return }
+            self.openIndicator.setColor(self.themeStore.current.accent.nsColor)
+            self.updateButton()
+        }
         configureButton()
         installScrollMonitor()
         updateButton()
@@ -49,7 +54,7 @@ final class StatusItemController: NSObject {
         if !visible { panel.close() }
         statusItem.isVisible = visible
         guard let button = statusItem.button else { return }
-        BarGlyph.apply(to: button, color: model.alarming ? theme.urgent.nsColor : nil)
+        BarGlyph.apply(to: button, color: model.alarming ? themeStore.current.urgent.nsColor : nil)
     }
 
     @objc private func buttonClicked(_ sender: NSStatusBarButton) {
