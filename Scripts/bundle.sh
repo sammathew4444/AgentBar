@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 # Assembles AgentBar.app from the binary produced by `swift build`.
 # Usage: swift build && ./Scripts/bundle.sh
-#        CONFIGURATION=release ./Scripts/bundle.sh   (after swift build -c release)
+#        CONFIGURATION=release ./Scripts/bundle.sh                        (after swift build -c release)
+#        CONFIGURATION=release ARCHS="arm64 x86_64" ./Scripts/bundle.sh  (after a universal build)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-debug}"
-BIN_DIR="$(swift build --package-path "$ROOT" -c "$CONFIGURATION" --show-bin-path)"
+ARCH_FLAGS=()
+for arch in ${ARCHS:-}; do
+    ARCH_FLAGS+=(--arch "$arch")
+done
+# The ${…+…} form keeps bash 3.2 (macOS /bin/bash) happy with an empty array under `set -u`.
+BIN_DIR="$(swift build --package-path "$ROOT" -c "$CONFIGURATION" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 BINARY="$BIN_DIR/AgentBar"
 APP="$ROOT/AgentBar.app"
 
 if [[ ! -x "$BINARY" ]]; then
-    echo "error: $BINARY not found. Run 'swift build -c $CONFIGURATION' first." >&2
+    echo "error: $BINARY not found. Run 'swift build -c $CONFIGURATION ${ARCH_FLAGS[*]:-}' first." >&2
     exit 1
 fi
 
@@ -41,7 +47,7 @@ for f in "$ROOT"/Resources/Agents/*.svg; do
 done
 shopt -u nullglob
 
-# Ad-hoc signature so the bundle launches locally. Developer ID signing lives in release.sh.
+# Ad-hoc signature so the bundle launches. AgentBar isn't Developer ID signed or notarized.
 codesign --force --sign - "$APP" >/dev/null
 
-echo "Built $APP ($CONFIGURATION)"
+echo "Built $APP ($CONFIGURATION${ARCHS:+, $ARCHS})"

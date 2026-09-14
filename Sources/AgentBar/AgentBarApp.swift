@@ -16,7 +16,8 @@ enum AgentBarApp {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let settings = AppSettings()
+    /// Built on first use, after `migrateDefaults` has run.
+    private lazy var settings = AppSettings()
     private let model = PanelModel()
     private var themeStore: ThemeStore?
     private var syncer: UsageSyncer?
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var watcher: DirectoryWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.migrateDefaults()
         installEditMenu()
         let themeStore = ThemeStore(themesDirectory: Bundle.main.url(forResource: "Themes", withExtension: nil))
         self.themeStore = themeStore
@@ -82,6 +84,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .sync:
             syncer?.schedule()
         }
+    }
+
+    /// Builds before release ran under a placeholder bundle id. Their saved settings (theme,
+    /// agents, sync) move over once, without overwriting anything already set.
+    private static func migrateDefaults() {
+        let placeholder = "dev.agentbar.AgentBar"
+        let marker = "migratedDefaultsFrom"
+        let defaults = UserDefaults.standard
+        guard Bundle.main.bundleIdentifier != placeholder, defaults.object(forKey: marker) == nil else { return }
+        for (key, value) in defaults.persistentDomain(forName: placeholder) ?? [:] where defaults.object(forKey: key) == nil {
+            defaults.set(value, forKey: key)
+        }
+        defaults.set(placeholder, forKey: marker)
     }
 
     /// An accessory app has no menu bar, but text fields still need ⌘X ⌘C ⌘V ⌘A and undo, which

@@ -2,3 +2,4 @@
 .swiftpm/
 AgentBar.app/
 .DS_Store
+dist/
